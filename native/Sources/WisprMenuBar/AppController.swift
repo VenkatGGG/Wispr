@@ -13,10 +13,7 @@ final class AppController {
         configuration = try AppConfiguration.load()
         historyStore = try HistoryStore(fileURL: configuration.historyFileURL, limit: configuration.historyLimit)
         phraseStore = try PhraseStore(fileURL: configuration.phrasesFileURL)
-        presentationController = AppPresentationController(
-            historyFileURL: configuration.historyFileURL,
-            phrasesFileURL: configuration.phrasesFileURL
-        )
+        presentationController = AppPresentationController(historyStore: historyStore, phraseStore: phraseStore)
         dictationController = DictationController(
             configuration: configuration,
             historyStore: historyStore,
@@ -32,7 +29,6 @@ final class AppController {
     }
 
     func start() {
-        presentationController.updateHistory(historyStore.recentEntries())
         presentationController.updateStatus(.ready)
         dictationController.start()
     }

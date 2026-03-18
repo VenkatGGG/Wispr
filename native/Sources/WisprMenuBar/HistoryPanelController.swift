@@ -1,18 +1,17 @@
 @preconcurrency import AppKit
 import SwiftUI
 
+enum HistoryPanelMode {
+    case history
+    case phrases
+}
+
 @MainActor
 final class HistoryPanelModel: ObservableObject {
-    let historyFileURL: URL
-    let phrasesFileURL: URL
-
     @Published private(set) var status: AppStatus = .ready
     @Published private(set) var entries: [HistoryEntry] = []
-
-    init(historyFileURL: URL, phrasesFileURL: URL) {
-        self.historyFileURL = historyFileURL
-        self.phrasesFileURL = phrasesFileURL
-    }
+    @Published private(set) var phrases: [PhraseEntry] = []
+    @Published private(set) var mode: HistoryPanelMode = .history
 
     func updateStatus(_ status: AppStatus) {
         self.status = status
@@ -21,17 +20,31 @@ final class HistoryPanelModel: ObservableObject {
     func updateHistory(_ entries: [HistoryEntry]) {
         self.entries = entries
     }
+
+    func updatePhrases(_ phrases: [PhraseEntry]) {
+        self.phrases = phrases
+    }
+
+    func showHistory() {
+        mode = .history
+    }
+
+    func showPhrases() {
+        mode = .phrases
+    }
 }
 
 @MainActor
 final class HistoryPanelController {
     private let model: HistoryPanelModel
+    private let phraseStore: PhraseStore
     private let panel: FloatingHistoryPanel
 
-    init(model: HistoryPanelModel) {
+    init(model: HistoryPanelModel, phraseStore: PhraseStore) {
         self.model = model
+        self.phraseStore = phraseStore
         panel = FloatingHistoryPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 520),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -39,12 +52,14 @@ final class HistoryPanelController {
         configurePanel()
     }
 
-    func toggle(relativeTo statusButtonFrame: NSRect?) {
-        if panel.isVisible {
-            hide()
-        } else {
-            show(relativeTo: statusButtonFrame)
-        }
+    func showHistory(relativeTo statusButtonFrame: NSRect?) {
+        model.showHistory()
+        show(relativeTo: statusButtonFrame)
+    }
+
+    func showPhrases(relativeTo statusButtonFrame: NSRect?) {
+        model.showPhrases()
+        show(relativeTo: statusButtonFrame)
     }
 
     func hide() {
@@ -75,9 +90,12 @@ final class HistoryPanelController {
 
         let view = HistoryPanelView(
             model: model,
-            onCopy: { [weak self] text in self?.copy(text) },
-            onRevealHistoryFile: { [weak self] in self?.reveal(self?.model.historyFileURL) },
-            onRevealPhrasesFile: { [weak self] in self?.reveal(self?.model.phrasesFileURL) },
+            onCopySentence: { [weak self] text in self?.copy(text) },
+            onShowHistory: { [weak self] in self?.model.showHistory() },
+            onShowPhrases: { [weak self] in self?.model.showPhrases() },
+            onAddPhrase: { [weak self] trigger, replacement in self?.addPhrase(trigger: trigger, replacement: replacement) },
+            onUpdatePhrase: { [weak self] id, trigger, replacement in self?.updatePhrase(id: id, trigger: trigger, replacement: replacement) },
+            onRemovePhrase: { [weak self] id in self?.removePhrase(id: id) },
             onClose: { [weak self] in self?.hide() }
         )
 
@@ -100,9 +118,30 @@ final class HistoryPanelController {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func reveal(_ url: URL?) {
-        guard let url else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+    private func addPhrase(trigger: String, replacement: String) {
+        do {
+            try phraseStore.add(trigger: trigger, replacement: replacement)
+            model.updatePhrases(phraseStore.allEntries())
+            model.showPhrases()
+        } catch {
+            model.updateStatus(.error(error.localizedDescription))
+        }
+    }
+
+    private func updatePhrase(id: UUID, trigger: String, replacement: String) {
+        do {
+            try phraseStore.update(id: id, trigger: trigger, replacement: replacement)
+            model.updatePhrases(phraseStore.allEntries())
+            model.showPhrases()
+        } catch {
+            model.updateStatus(.error(error.localizedDescription))
+        }
+    }
+
+    private func removePhrase(id: UUID) {
+        phraseStore.remove(id: id)
+        model.updatePhrases(phraseStore.allEntries())
+        model.showPhrases()
     }
 
     private func positionPanel(relativeTo statusButtonFrame: NSRect?) {
@@ -135,25 +174,35 @@ private final class FloatingHistoryPanel: NSPanel {
 private struct HistoryPanelView: View {
     @ObservedObject var model: HistoryPanelModel
 
-    let onCopy: (String) -> Void
-    let onRevealHistoryFile: () -> Void
-    let onRevealPhrasesFile: () -> Void
+    let onCopySentence: (String) -> Void
+    let onShowHistory: () -> Void
+    let onShowPhrases: () -> Void
+    let onAddPhrase: (String, String) -> Void
+    let onUpdatePhrase: (UUID, String, String) -> Void
+    let onRemovePhrase: (UUID) -> Void
     let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-                .overlay(Color.white.opacity(0.08))
-            content
+                .overlay(Color.white.opacity(0.06))
+            Group {
+                switch model.mode {
+                case .history:
+                    historyContent
+                case .phrases:
+                    phrasesContent
+                }
+            }
             footer
         }
-        .frame(width: 420, height: 560)
+        .frame(width: 400, height: 520)
         .background(
             LinearGradient(
                 colors: [
-                    Color(red: 0.11, green: 0.12, blue: 0.15),
-                    Color(red: 0.08, green: 0.09, blue: 0.11),
+                    Color(red: 0.10, green: 0.11, blue: 0.13),
+                    Color(red: 0.07, green: 0.08, blue: 0.10),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -162,75 +211,92 @@ private struct HistoryPanelView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Flow")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
-                Text(model.status.headline)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.88))
-                Text(model.status.detail)
-                    .font(.system(size: 12, weight: .regular, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(model.mode == .history ? "History" : "Phrases")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                if case .error = model.status {
+                    Text(model.status.detail)
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.38))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 0)
 
-            VStack(alignment: .trailing, spacing: 10) {
+            HStack(spacing: 8) {
                 StatusBadge(status: model.status)
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .frame(width: 26, height: 26)
+                        .foregroundStyle(.white.opacity(0.84))
+                        .frame(width: 24, height: 24)
                         .background(Color.white.opacity(0.08), in: Circle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(20)
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
     }
 
-    private var content: some View {
+    private var historyContent: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
+            LazyVStack(spacing: 10) {
                 if model.entries.isEmpty {
-                    emptyState
+                    MinimalEmptyState(
+                        title: "No translations yet",
+                        detail: "Hold Option, speak, release."
+                    )
                 } else {
                     ForEach(model.entries) { entry in
-                        HistoryEntryCard(entry: entry, onCopy: onCopy)
+                        SentenceRow(text: entry.finalText) {
+                            onCopySentence(entry.finalText)
+                        }
                     }
                 }
             }
-            .padding(18)
+            .padding(16)
         }
         .scrollIndicators(.hidden)
     }
 
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("No dictations yet")
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-            Text("Hold Option, speak, and release. Your recent dictations will land here.")
-                .font(.system(size: 13, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.62))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    private var phrasesContent: some View {
+        PhraseEditorView(
+            phrases: model.phrases,
+            onAddPhrase: onAddPhrase,
+            onUpdatePhrase: onUpdatePhrase,
+            onRemovePhrase: onRemovePhrase
+        )
+        .padding(16)
     }
 
     private var footer: some View {
         HStack(spacing: 10) {
-            FooterButton(title: "History File", icon: "clock.arrow.circlepath", action: onRevealHistoryFile)
-            FooterButton(title: "Phrases File", icon: "text.badge.plus", action: onRevealPhrasesFile)
+            FooterPill(
+                title: "History",
+                subtitle: "single click",
+                isActive: model.mode == .history,
+                onTap: onShowHistory
+            )
+
+            DoubleTapFooterPill(
+                title: "Phrases",
+                subtitle: "double click",
+                isActive: model.mode == .phrases,
+                onDoubleTap: onShowPhrases
+            )
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .background(Color.black.opacity(0.18))
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 16)
+        .background(Color.black.opacity(0.16))
     }
 }
 
@@ -239,9 +305,9 @@ private struct StatusBadge: View {
 
     var body: some View {
         Label(title, systemImage: status.symbolName)
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .foregroundStyle(Color(nsColor: status.tintColor))
             .background(
                 RoundedRectangle(cornerRadius: 999, style: .continuous)
@@ -263,95 +329,227 @@ private struct StatusBadge: View {
     }
 }
 
-private struct HistoryEntryCard: View {
-    let entry: HistoryEntry
-    let onCopy: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text(entry.sourceApp ?? "Unknown App")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.99, green: 0.79, blue: 0.45))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color(red: 0.99, green: 0.79, blue: 0.45).opacity(0.16), in: Capsule())
-                Spacer()
-                Text(entry.createdAt.historyPanelTimestamp)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.48))
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Formatted")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.55))
-                Text(entry.finalText)
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white)
-                    .textSelection(.enabled)
-            }
-
-            if entry.rawTranscript != entry.finalText {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Raw transcript")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.55))
-                    Text(entry.rawTranscript)
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .textSelection(.enabled)
-                }
-            }
-
-            HStack {
-                Spacer()
-                Button("Copy") {
-                    onCopy(entry.finalText)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Color(red: 0.84, green: 0.37, blue: 0.17))
-                .controlSize(.small)
-            }
-        }
-        .padding(16)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-        )
-    }
-}
-
-private struct FooterButton: View {
+private struct MinimalEmptyState: View {
     let title: String
-    let icon: String
-    let action: () -> Void
+    let detail: String
 
     var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+            Text(detail)
+                .font(.system(size: 12, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.56))
         }
-        .buttonStyle(.borderless)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct SentenceRow: View {
+    let text: String
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Text(text)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct FooterPill: View {
+    let title: String
+    let subtitle: String
+    let isActive: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(subtitle)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .opacity(0.56)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .foregroundStyle(.white)
+            .background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var background: Color {
+        isActive ? Color.white.opacity(0.12) : Color.white.opacity(0.06)
+    }
+}
+
+private struct DoubleTapFooterPill: View {
+    let title: String
+    let subtitle: String
+    let isActive: Bool
+    let onDoubleTap: () -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+            Text(subtitle)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .opacity(0.56)
+        }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .foregroundStyle(.white.opacity(0.84))
+        .foregroundStyle(.white)
+        .background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onDoubleTap)
+    }
+
+    private var background: Color {
+        isActive ? Color.white.opacity(0.12) : Color.white.opacity(0.06)
     }
 }
 
-private extension Date {
-    var historyPanelTimestamp: String {
-        HistoryPanelFormatting.dateFormatter.string(from: self)
+private struct PhraseEditorView: View {
+    let phrases: [PhraseEntry]
+    let onAddPhrase: (String, String) -> Void
+    let onUpdatePhrase: (UUID, String, String) -> Void
+    let onRemovePhrase: (UUID) -> Void
+
+    @State private var newTrigger = ""
+    @State private var newReplacement = ""
+    @State private var editingID: UUID?
+    @State private var editingTrigger = ""
+    @State private var editingReplacement = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                if phrases.isEmpty {
+                    MinimalEmptyState(
+                        title: "No phrases yet",
+                        detail: "Add quick replacements below."
+                    )
+                } else {
+                    ForEach(phrases) { phrase in
+                        phraseRow(for: phrase)
+                    }
+                }
+
+                addPhraseCard
+            }
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    @ViewBuilder
+    private func phraseRow(for phrase: PhraseEntry) -> some View {
+        if editingID == phrase.id {
+            VStack(alignment: .leading, spacing: 10) {
+                PhraseField(title: "Trigger", text: $editingTrigger)
+                PhraseField(title: "Replacement", text: $editingReplacement)
+                HStack(spacing: 8) {
+                    smallActionButton("Save", tint: Color(red: 0.30, green: 0.72, blue: 0.45)) {
+                        onUpdatePhrase(phrase.id, editingTrigger, editingReplacement)
+                        editingID = nil
+                        editingTrigger = ""
+                        editingReplacement = ""
+                    }
+                    smallActionButton("Cancel", tint: Color.white.opacity(0.16)) {
+                        editingID = nil
+                        editingTrigger = ""
+                        editingReplacement = ""
+                    }
+                }
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(phrase.trigger)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(phrase.replacement)
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+
+                HStack(spacing: 8) {
+                    smallActionButton("Edit", tint: Color.white.opacity(0.14)) {
+                        editingID = phrase.id
+                        editingTrigger = phrase.trigger
+                        editingReplacement = phrase.replacement
+                    }
+                    smallActionButton("Remove", tint: Color(red: 0.75, green: 0.26, blue: 0.24)) {
+                        onRemovePhrase(phrase.id)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
+    private var addPhraseCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Add New")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+            PhraseField(title: "Trigger", text: $newTrigger)
+            PhraseField(title: "Replacement", text: $newReplacement)
+            smallActionButton("Add", tint: Color(red: 0.28, green: 0.62, blue: 0.96)) {
+                onAddPhrase(newTrigger, newReplacement)
+                newTrigger = ""
+                newReplacement = ""
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func smallActionButton(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(tint, in: Capsule())
     }
 }
 
-private enum HistoryPanelFormatting {
-    static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
+private struct PhraseField: View {
+    let title: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.54))
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
 }

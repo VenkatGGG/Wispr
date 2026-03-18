@@ -6,21 +6,17 @@ final class MenuBarController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let statusMenuItem = NSMenuItem(title: "Flow is ready", action: nil, keyEquivalent: "")
-    private let showHistoryItem = NSMenuItem(title: "Show History", action: #selector(toggleHistoryPanel), keyEquivalent: "")
+    private let showHistoryItem = NSMenuItem(title: "Show History", action: #selector(showHistoryPanel), keyEquivalent: "")
+    private let showPhrasesItem = NSMenuItem(title: "Show Phrases", action: #selector(showPhrasesPanel), keyEquivalent: "")
     private let menuSeparator = NSMenuItem.separator()
-    private let footerSeparator = NSMenuItem.separator()
-    private let revealHistoryItem = NSMenuItem(title: "Reveal History File", action: #selector(revealHistoryFile), keyEquivalent: "")
-    private let revealPhrasesItem = NSMenuItem(title: "Reveal Phrases File", action: #selector(revealPhrasesFile), keyEquivalent: "")
     private let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
-    private let historyFileURL: URL
-    private let phrasesFileURL: URL
+    private var pendingPrimaryClick: DispatchWorkItem?
 
-    var onToggleHistoryPanel: (() -> Void)?
+    var onShowHistoryPanel: (() -> Void)?
+    var onShowPhrasesPanel: (() -> Void)?
     var onQuit: (() -> Void)?
 
-    init(historyFileURL: URL, phrasesFileURL: URL) {
-        self.historyFileURL = historyFileURL
-        self.phrasesFileURL = phrasesFileURL
+    override init() {
         super.init()
         configureMenu()
     }
@@ -46,18 +42,15 @@ final class MenuBarController: NSObject {
         statusItem.button?.imagePosition = .imageOnly
 
         showHistoryItem.target = self
-        revealHistoryItem.target = self
-        revealPhrasesItem.target = self
+        showPhrasesItem.target = self
         quitItem.target = self
 
         updateStatus(.ready)
 
         menu.addItem(statusMenuItem)
         menu.addItem(showHistoryItem)
+        menu.addItem(showPhrasesItem)
         menu.addItem(menuSeparator)
-        menu.addItem(footerSeparator)
-        menu.addItem(revealHistoryItem)
-        menu.addItem(revealPhrasesItem)
         menu.addItem(quitItem)
     }
 
@@ -74,14 +67,30 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func handleStatusItemClick(_ sender: Any?) {
-        let eventType = NSApp.currentEvent?.type
-        DispatchQueue.main.async { [weak self] in
-            switch eventType {
-            case .rightMouseUp:
-                self?.showContextMenu()
-            default:
-                self?.onToggleHistoryPanel?()
+        let event = NSApp.currentEvent
+        let eventType = event?.type
+        let clickCount = event?.clickCount ?? 1
+
+        switch eventType {
+        case .rightMouseUp:
+            pendingPrimaryClick?.cancel()
+            pendingPrimaryClick = nil
+            showContextMenu()
+        case .leftMouseUp:
+            if clickCount >= 2 {
+                pendingPrimaryClick?.cancel()
+                pendingPrimaryClick = nil
+                onShowPhrasesPanel?()
+            } else {
+                let workItem = DispatchWorkItem { [weak self] in
+                    self?.onShowHistoryPanel?()
+                }
+                pendingPrimaryClick?.cancel()
+                pendingPrimaryClick = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: workItem)
             }
+        default:
+            break
         }
     }
 
@@ -92,16 +101,12 @@ final class MenuBarController: NSObject {
         statusItem.menu = nil
     }
 
-    @objc private func toggleHistoryPanel() {
-        onToggleHistoryPanel?()
+    @objc private func showHistoryPanel() {
+        onShowHistoryPanel?()
     }
 
-    @objc private func revealHistoryFile() {
-        NSWorkspace.shared.activateFileViewerSelecting([historyFileURL])
-    }
-
-    @objc private func revealPhrasesFile() {
-        NSWorkspace.shared.activateFileViewerSelecting([phrasesFileURL])
+    @objc private func showPhrasesPanel() {
+        onShowPhrasesPanel?()
     }
 
     @objc private func quit() {

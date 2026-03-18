@@ -13,13 +13,18 @@ final class AppPresentationController {
         }
     }
 
-    init(historyFileURL: URL, phrasesFileURL: URL) {
-        model = HistoryPanelModel(historyFileURL: historyFileURL, phrasesFileURL: phrasesFileURL)
-        historyPanelController = HistoryPanelController(model: model)
-        menuBarController = MenuBarController(historyFileURL: historyFileURL, phrasesFileURL: phrasesFileURL)
-        menuBarController.onToggleHistoryPanel = { [weak self] in
-            self?.toggleHistoryPanel()
+    init(historyStore: HistoryStore, phraseStore: PhraseStore) {
+        model = HistoryPanelModel()
+        historyPanelController = HistoryPanelController(model: model, phraseStore: phraseStore)
+        menuBarController = MenuBarController()
+        menuBarController.onShowHistoryPanel = { [weak self] in
+            self?.showHistoryPanel()
         }
+        menuBarController.onShowPhrasesPanel = { [weak self] in
+            self?.showPhrasesPanel()
+        }
+        model.updateHistory(historyStore.recentEntries())
+        model.updatePhrases(phraseStore.allEntries())
     }
 
     func updateStatus(_ status: AppStatus) {
@@ -31,11 +36,19 @@ final class AppPresentationController {
         model.updateHistory(entries)
     }
 
+    func updatePhrases(_ entries: [PhraseEntry]) {
+        model.updatePhrases(entries)
+    }
+
     func stop() {
         historyPanelController.hide()
     }
 
-    private func toggleHistoryPanel() {
-        historyPanelController.toggle(relativeTo: menuBarController.statusButtonScreenFrame())
+    private func showHistoryPanel() {
+        historyPanelController.showHistory(relativeTo: menuBarController.statusButtonScreenFrame())
+    }
+
+    private func showPhrasesPanel() {
+        historyPanelController.showPhrases(relativeTo: menuBarController.statusButtonScreenFrame())
     }
 }
