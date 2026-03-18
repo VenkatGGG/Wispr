@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.DS_Store
+*.py[cod]
+*.egg-info/
+build/
+dist/
+native/.build/
+WisprMenuBar.app/
+models/*.bin
+!models/.gitkeep

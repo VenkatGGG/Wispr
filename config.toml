@@ -1,0 +1,36 @@
+log_level = "INFO"
+cancel_on_other_key = true
+minimum_capture_ms = 180
+trigger_cooldown_ms = 120
+
+[audio]
+sample_rate_hz = 16000
+channels = 1
+block_duration_ms = 50
+device = ""
+
+[whisper]
+host = "127.0.0.1"
+port = 8178
+model_path = "models/ggml-small.en.bin"
+language = "en"
+endpoint = ""
+command = "/opt/homebrew/bin/whisper-server"
+auto_start = true
+startup_timeout_seconds = 20
+
+[ollama]
+host = "127.0.0.1"
+port = 11434
+model = "qwen2.5:3b"
+command = ""
+auto_start = true
+auto_pull_model = false
+request_timeout_seconds = 45
+
+[formatter]
+prompt_path = "prompts/formatter_system.txt"
+max_input_chars = 4000
+
+[output]
+restore_clipboard_delay_ms = 120
