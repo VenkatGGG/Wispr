@@ -1,25 +1,33 @@
 import Foundation
 
 final class OllamaFormatter {
+    private struct PromptTemplate {
+        let instructions: String
+        let maxInputCharacters: Int
+
+        func render(rawTranscript: String) -> String {
+            let transcript = String(rawTranscript.prefix(maxInputCharacters)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return """
+            \(instructions)
+
+            Raw transcript:
+            <<<
+            \(transcript)
+            >>>
+
+            Corrected text:
+            """
+        }
+    }
+
     private let configuration: AppConfiguration
+    private let promptTemplate: PromptTemplate
     private var process: Process?
     private var modelReady = false
 
-    private let prompt = """
-    You format dictated text.
-
-    Rules:
-    - Preserve the speaker's meaning and wording unless a correction is obviously needed.
-    - Fix grammar, punctuation, capitalization, and sentence boundaries.
-    - Remove filler artifacts only when they are clearly transcription noise.
-    - Do not summarize, explain, answer, or add new content.
-    - Do not wrap the output in quotes.
-    - Return only the corrected text.
-    - If the input is empty or unintelligible, return an empty string.
-    """
-
-    init(configuration: AppConfiguration) {
+    init(configuration: AppConfiguration) throws {
         self.configuration = configuration
+        self.promptTemplate = try Self.loadPromptTemplate(configuration: configuration)
     }
 
     func warmup() {
@@ -40,19 +48,26 @@ final class OllamaFormatter {
         try ensureModelAvailable()
 
         let generated = try generate(
-            prompt: """
-            \(prompt)
-
-            Raw transcript:
-            <<<
-            \(trimmed)
-            >>>
-
-            Corrected text:
-            """,
+            prompt: promptTemplate.render(rawTranscript: trimmed),
             timeout: 45
         )
         return generated.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func loadPromptTemplate(configuration: AppConfiguration) throws -> PromptTemplate {
+        let instructions = try String(contentsOf: configuration.formatterPromptURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instructions.isEmpty else {
+            throw NSError(
+                domain: AppIdentity.errorDomain,
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: "Formatter prompt file is empty: \(configuration.formatterPromptURL.path)"]
+            )
+        }
+        return PromptTemplate(
+            instructions: instructions,
+            maxInputCharacters: configuration.formatterMaxInputCharacters
+        )
     }
 
     private func ensureReady() throws {
@@ -64,7 +79,7 @@ final class OllamaFormatter {
                 "/usr/local/bin/ollama",
             ]) else {
                 throw NSError(
-                    domain: "WisprMenuBar",
+                    domain: AppIdentity.errorDomain,
                     code: 8,
                     userInfo: [NSLocalizedDescriptionKey: "Could not find ollama."]
                 )
@@ -88,7 +103,7 @@ final class OllamaFormatter {
         }
 
         throw NSError(
-            domain: "WisprMenuBar",
+            domain: AppIdentity.errorDomain,
             code: 9,
             userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for Ollama to start."]
         )
@@ -103,7 +118,7 @@ final class OllamaFormatter {
         }
 
         throw NSError(
-            domain: "WisprMenuBar",
+            domain: AppIdentity.errorDomain,
             code: 10,
             userInfo: [NSLocalizedDescriptionKey: "Ollama model \(configuration.ollamaModel) is not installed."]
         )
@@ -160,7 +175,7 @@ final class OllamaFormatter {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let response = json?["response"] as? String else {
             throw NSError(
-                domain: "WisprMenuBar",
+                domain: AppIdentity.errorDomain,
                 code: 11,
                 userInfo: [NSLocalizedDescriptionKey: "Unexpected Ollama response."]
             )
@@ -168,4 +183,3 @@ final class OllamaFormatter {
         return response
     }
 }
-

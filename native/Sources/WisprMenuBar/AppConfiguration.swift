@@ -12,6 +12,8 @@ struct AppConfiguration {
     let ollamaHost: String
     let ollamaPort: Int
     let ollamaModel: String
+    let formatterPromptURL: URL
+    let formatterMaxInputCharacters: Int
     let minimumCaptureMs: Int
     let restoreClipboardDelayMs: Int
     let historyLimit: Int
@@ -33,6 +35,8 @@ struct AppConfiguration {
             ollamaHost: "127.0.0.1",
             ollamaPort: 11434,
             ollamaModel: "qwen2.5:3b",
+            formatterPromptURL: repoRoot.appendingPathComponent("prompts/formatter_system.txt"),
+            formatterMaxInputCharacters: 4000,
             minimumCaptureMs: 180,
             restoreClipboardDelayMs: 120,
             historyLimit: 20,

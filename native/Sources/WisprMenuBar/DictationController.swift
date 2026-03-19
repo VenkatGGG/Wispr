@@ -23,13 +23,13 @@ final class DictationController: @unchecked Sendable {
         historyStore: HistoryStore,
         phraseStore: PhraseStore,
         presentationController: AppPresentationController
-    ) {
+    ) throws {
         self.configuration = configuration
         self.historyStore = historyStore
         self.phraseStore = phraseStore
         self.presentationController = presentationController
         whisperService = WhisperService(configuration: configuration)
-        ollamaFormatter = OllamaFormatter(configuration: configuration)
+        ollamaFormatter = try OllamaFormatter(configuration: configuration)
         textInserter = TextInserter(restoreClipboardDelayMs: configuration.restoreClipboardDelayMs)
 
         hotkeyMonitor.onPress = { [weak self] in self?.beginCapture() }

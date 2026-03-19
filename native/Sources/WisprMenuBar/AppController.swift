@@ -14,7 +14,7 @@ final class AppController {
         historyStore = try HistoryStore(fileURL: configuration.historyFileURL, limit: configuration.historyLimit)
         phraseStore = try PhraseStore(fileURL: configuration.phrasesFileURL)
         presentationController = AppPresentationController(historyStore: historyStore, phraseStore: phraseStore)
-        dictationController = DictationController(
+        dictationController = try DictationController(
             configuration: configuration,
             historyStore: historyStore,
             phraseStore: phraseStore,
