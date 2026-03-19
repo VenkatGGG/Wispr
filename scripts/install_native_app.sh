@@ -6,7 +6,8 @@ BUILD_OUTPUT_DIR="${WISPR_NATIVE_BUILD_OUTPUT_DIR:-${HOME}/Library/Caches/Flow}"
 SOURCE_APP_DIR="${BUILD_OUTPUT_DIR}/Flow.app"
 TARGET_APPS_DIR="${HOME}/Applications"
 TARGET_APP_DIR="${TARGET_APPS_DIR}/Flow.app"
-APP_SUPPORT_DIR="${HOME}/Library/Application Support/WisprMenuBar"
+APP_SUPPORT_DIR="${HOME}/Library/Application Support/Flow"
+LEGACY_APP_SUPPORT_DIR="${HOME}/Library/Application Support/WisprMenuBar"
 RUNTIME_CONFIG_PATH="${APP_SUPPORT_DIR}/runtime.json"
 
 if [[ ! -d "${SOURCE_APP_DIR}" ]]; then
@@ -21,6 +22,12 @@ rm -rf "${TARGET_APPS_DIR}/WisprMenuBar.app"
 rm -rf "${TARGET_APP_DIR}"
 ditto "${SOURCE_APP_DIR}" "${TARGET_APP_DIR}"
 mkdir -p "${APP_SUPPORT_DIR}"
+
+for filename in history.json phrases.json; do
+  if [[ -f "${LEGACY_APP_SUPPORT_DIR}/${filename}" && ! -f "${APP_SUPPORT_DIR}/${filename}" ]]; then
+    cp "${LEGACY_APP_SUPPORT_DIR}/${filename}" "${APP_SUPPORT_DIR}/${filename}"
+  fi
+done
 
 cat > "${RUNTIME_CONFIG_PATH}" <<EOF
 {

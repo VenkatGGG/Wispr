@@ -9,13 +9,7 @@ enum Permissions {
             return true
         }
 
-        if Thread.isMainThread {
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            DispatchQueue.main.sync {
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
+        activateForPermissionPrompt()
 
         let semaphore = DispatchSemaphore(value: 0)
         let permissionBox = MicrophonePermissionBox()
@@ -94,6 +88,12 @@ enum Permissions {
 
     static func canPostEvents() -> Bool {
         CGPreflightPostEventAccess()
+    }
+
+    private static func activateForPermissionPrompt() {
+        Task { @MainActor in
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }
 

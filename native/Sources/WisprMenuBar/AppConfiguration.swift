@@ -22,6 +22,7 @@ struct AppConfiguration {
         let fileManager = FileManager.default
         let appSupport = try appSupportDirectory(fileManager: fileManager)
         try fileManager.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        try migrateLegacySupportFiles(fileManager: fileManager, appSupport: appSupport)
         let repoRoot = try resolveRepositoryRoot(fileManager: fileManager, appSupport: appSupport)
 
         return AppConfiguration(
@@ -35,8 +36,8 @@ struct AppConfiguration {
             minimumCaptureMs: 180,
             restoreClipboardDelayMs: 120,
             historyLimit: 20,
-            historyFileURL: appSupport.appendingPathComponent("history.json"),
-            phrasesFileURL: appSupport.appendingPathComponent("phrases.json")
+            historyFileURL: appSupport.appendingPathComponent(AppIdentity.historyFilename),
+            phrasesFileURL: appSupport.appendingPathComponent(AppIdentity.phrasesFilename)
         )
     }
 
@@ -57,7 +58,7 @@ struct AppConfiguration {
     }
 
     private static func loadConfiguredRepositoryRoot(appSupport: URL) -> URL? {
-        let runtimeConfigURL = appSupport.appendingPathComponent("runtime.json")
+        let runtimeConfigURL = appSupport.appendingPathComponent(AppIdentity.runtimeConfigurationFilename)
         guard let data = try? Data(contentsOf: runtimeConfigURL),
               let runtimeConfiguration = try? JSONDecoder().decode(RuntimeConfiguration.self, from: data)
         else {
@@ -73,7 +74,36 @@ struct AppConfiguration {
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
-        ).appendingPathComponent("WisprMenuBar", isDirectory: true)
+        ).appendingPathComponent(AppIdentity.supportDirectoryName, isDirectory: true)
+    }
+
+    private static func migrateLegacySupportFiles(fileManager: FileManager, appSupport: URL) throws {
+        let baseSupportDirectory = appSupport.deletingLastPathComponent()
+        let legacySupport = baseSupportDirectory.appendingPathComponent(
+            AppIdentity.legacySupportDirectoryName,
+            isDirectory: true
+        )
+
+        guard legacySupport.path != appSupport.path,
+              fileManager.fileExists(atPath: legacySupport.path)
+        else {
+            return
+        }
+
+        for filename in [
+            AppIdentity.runtimeConfigurationFilename,
+            AppIdentity.historyFilename,
+            AppIdentity.phrasesFilename,
+        ] {
+            let sourceURL = legacySupport.appendingPathComponent(filename)
+            let destinationURL = appSupport.appendingPathComponent(filename)
+            guard fileManager.fileExists(atPath: sourceURL.path),
+                  !fileManager.fileExists(atPath: destinationURL.path)
+            else {
+                continue
+            }
+            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        }
     }
 
     private static func detectRepositoryRoot(fileManager: FileManager) throws -> URL {
@@ -96,7 +126,7 @@ struct AppConfiguration {
         }
 
         throw NSError(
-            domain: "WisprMenuBar",
+            domain: AppIdentity.errorDomain,
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "Could not locate the repository root containing config.toml. Reinstall the native app so it can refresh its runtime configuration."]
         )

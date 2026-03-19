@@ -27,7 +27,7 @@ The repo currently contains two runnable paths:
 - the original Python daemon
 - a native macOS menu bar app under [`native/`](/Users/sri/Desktop/silly_experiments/Wispr/native/Package.swift)
 
-If you want the Wispr/Flow-style experience, use the native app.
+If you want the Flow experience, use the native app.
 
 ### Python Daemon
 
@@ -44,21 +44,21 @@ If you want the Wispr/Flow-style experience, use the native app.
 - Build the app bundle with `make native-build`
 - Install the app into `~/Applications` with `make native-install`
 - Open it with `make native-open`
-- The build artifact is created at [`~/Library/Caches/WisprMenuBar/WisprMenuBar.app`](/Users/sri/Library/Caches/WisprMenuBar/WisprMenuBar.app)
+- The build artifact is created at [`~/Library/Caches/Flow/Flow.app`](/Users/sri/Library/Caches/Flow/Flow.app)
 - Install login startup with `make native-login-install`
 - Remove login startup with `make native-login-uninstall`
 
 For macOS permissions, grant access to the installed app at:
 
-- `~/Applications/WisprMenuBar.app`
+- `~/Applications/Flow.app`
 
 The native app keeps a rolling recent history of the last 20 entries at:
 
-- `~/Library/Application Support/WisprMenuBar/history.json`
+- `~/Library/Application Support/Flow/history.json`
 
 The native phrase dictionary lives at:
 
-- `~/Library/Application Support/WisprMenuBar/phrases.json`
+- `~/Library/Application Support/Flow/phrases.json`
 
 Example `phrases.json` entry:
 
@@ -79,8 +79,8 @@ Example `phrases.json` entry:
 - Very short taps are ignored.
 - Left click on the menu bar icon opens the floating history panel.
 - Right click on the menu bar icon opens the utility menu.
-- Phrase replacements are exact-match only in the current version.
-- Output is inserted via accessibility first, then falls back to paste and unicode typing.
+- Phrase replacements use normalized matching for simple casing and punctuation variants.
+- Output is inserted via accessibility or targeted paste, depending on the app.
 
 ## Config
 
