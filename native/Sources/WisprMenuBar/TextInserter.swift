@@ -6,6 +6,12 @@ private struct ClipboardSnapshot {
     let items: [[NSPasteboard.PasteboardType: Data]]
 }
 
+private struct TargetApplicationContext {
+    let pid: pid_t
+    let bundleIdentifier: String
+    let localizedName: String
+}
+
 enum TextInsertionMethod: String {
     case accessibility
     case pasteboard
@@ -21,6 +27,22 @@ final class TextInserter {
         "com.mitchellh.ghostty",
         "co.zeit.hyper",
         "com.1password.1password", // password fields block AX writes
+    ]
+
+    // Web and Electron prompt boxes often expose placeholder or hint text as
+    // the live AX value. Paste is more reliable than reconstructing their
+    // string content through kAXValueAttribute writes.
+    private static let pastePreferredBundleIDs: Set<String> = [
+        "com.apple.Safari",
+        "com.google.Chrome",
+        "com.brave.Browser",
+        "org.mozilla.firefox",
+        "com.microsoft.edgemac",
+        "company.thebrowser.Browser", // Arc
+        "app.zen-browser.zen",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+        "com.openai.codex",
     ]
 
     private let restoreDelay: TimeInterval
@@ -42,14 +64,42 @@ final class TextInserter {
         logInsertionContext()
 
         var failures: [(method: String, error: Error)] = []
+        var attemptedPaste = false
 
         // Terminal emulators ignore kAXValueAttribute writes — the value change
         // lands in the AX tree but never reaches the PTY. Skip AX for these apps
         // and go straight to paste (Cmd+V posted to the process PID).
-        let frontBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-        let isTerminal = TextInserter.terminalBundleIDs.contains(frontBundleID)
+        let targetApp = resolveTargetApplicationContext()
+        let targetBundleID = targetApp?.bundleIdentifier ?? ""
+        let targetDisplayName = targetApp?.localizedName ?? "unknown"
+        let isTerminal = TextInserter.terminalBundleIDs.contains(targetBundleID)
+        let prefersPaste = TextInserter.pastePreferredBundleIDs.contains(targetBundleID)
 
-        if !isTerminal {
+        NSLog("[TextInserter] Target app for insertion: %@ (%@)", targetDisplayName, targetBundleID)
+
+        if isTerminal {
+            NSLog("[TextInserter] Skipping AX for terminal app (%@), using paste.", targetBundleID)
+        } else if prefersPaste {
+            NSLog("[TextInserter] Preferring paste for app (%@) to avoid placeholder-style AX values.", targetBundleID)
+            do {
+                attemptedPaste = true
+                try pasteText(trimmed)
+                NSLog("[TextInserter] Inserted text via pasteboard paste.")
+                return .pasteboard
+            } catch {
+                NSLog("[TextInserter] Paste insertion failed: %@", error.localizedDescription)
+                failures.append((method: "pasteboard", error: error))
+            }
+
+            do {
+                try insertViaAccessibility(trimmed)
+                NSLog("[TextInserter] Inserted text via accessibility fallback.")
+                return .accessibility
+            } catch {
+                NSLog("[TextInserter] Accessibility fallback failed: %@", error.localizedDescription)
+                failures.append((method: "accessibility", error: error))
+            }
+        } else {
             do {
                 try insertViaAccessibility(trimmed)
                 NSLog("[TextInserter] Inserted text via accessibility.")
@@ -58,17 +108,17 @@ final class TextInserter {
                 NSLog("[TextInserter] Accessibility insertion failed: %@", error.localizedDescription)
                 failures.append((method: "accessibility", error: error))
             }
-        } else {
-            NSLog("[TextInserter] Skipping AX for terminal app (%@), using paste.", frontBundleID)
         }
 
-        do {
-            try pasteText(trimmed)
-            NSLog("[TextInserter] Inserted text via pasteboard paste.")
-            return .pasteboard
-        } catch {
-            NSLog("[TextInserter] Paste insertion failed: %@", error.localizedDescription)
-            failures.append((method: "pasteboard", error: error))
+        if !attemptedPaste {
+            do {
+                try pasteText(trimmed)
+                NSLog("[TextInserter] Inserted text via pasteboard paste.")
+                return .pasteboard
+            } catch {
+                NSLog("[TextInserter] Paste insertion failed: %@", error.localizedDescription)
+                failures.append((method: "pasteboard", error: error))
+            }
         }
 
         let summary = failures.map { "  [\($0.method)] \($0.error.localizedDescription)" }.joined(separator: "\n")
@@ -102,6 +152,11 @@ final class TextInserter {
         var pid: pid_t = 0
         if AXUIElementGetPid(el, &pid) == .success {
             NSLog("[TextInserter] Focused element PID: %d", pid)
+            if let app = NSRunningApplication(processIdentifier: pid) {
+                NSLog("[TextInserter] Focused element app: %@ (%@)",
+                      app.localizedName ?? "unknown",
+                      app.bundleIdentifier ?? "unknown")
+            }
         }
 
         var roleRef: CFTypeRef?
@@ -124,6 +179,14 @@ final class TextInserter {
         let valueErr = AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &valueRef)
         NSLog("[TextInserter] kAXValueAttribute: %@ (AXError %d)",
               valueErr == .success ? "present" : "absent", valueErr.rawValue)
+
+        var placeholderRef: CFTypeRef?
+        let placeholderErr = AXUIElementCopyAttributeValue(el, "AXPlaceholderValue" as CFString, &placeholderRef)
+        if placeholderErr == .success, let placeholder = placeholderRef as? String {
+            NSLog("[TextInserter] AXPlaceholderValue: %@", placeholder)
+        } else {
+            NSLog("[TextInserter] AXPlaceholderValue: unavailable (AXError %d)", placeholderErr.rawValue)
+        }
 
         var rangeRef: CFTypeRef?
         let rangeErr = AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &rangeRef)
@@ -165,6 +228,8 @@ final class TextInserter {
             )
         }
 
+        let placeholderValue = copyPlaceholderValue(from: focusedElement)
+
         var selectedRangeObject: CFTypeRef?
         let rangeResult = AXUIElementCopyAttributeValue(focusedElement, kAXSelectedTextRangeAttribute as CFString, &selectedRangeObject)
         guard rangeResult == .success,
@@ -196,10 +261,18 @@ final class TextInserter {
             )
         }
 
-        let currentNSString = currentValue as NSString
+        let isPlaceholderValue = shouldTreatAsPlaceholder(currentValue, placeholder: placeholderValue)
+        let effectiveCurrentValue = isPlaceholderValue ? "" : currentValue
+        let effectiveSelectedRange = isPlaceholderValue ? CFRange(location: 0, length: 0) : selectedRange
+
+        if isPlaceholderValue, let placeholderValue {
+            NSLog("[TextInserter] Treating focused field value as placeholder text: %@", placeholderValue)
+        }
+
+        let currentNSString = effectiveCurrentValue as NSString
         let replacementRange = NSRange(
-            location: max(0, min(selectedRange.location, currentNSString.length)),
-            length: max(0, min(selectedRange.length, currentNSString.length - max(0, min(selectedRange.location, currentNSString.length))))
+            location: max(0, min(effectiveSelectedRange.location, currentNSString.length)),
+            length: max(0, min(effectiveSelectedRange.length, currentNSString.length - max(0, min(effectiveSelectedRange.location, currentNSString.length))))
         )
         let updatedValue = currentNSString.replacingCharacters(in: replacementRange, with: text)
 
@@ -222,6 +295,73 @@ final class TextInserter {
             kAXSelectedTextRangeAttribute as CFString,
             newSelectionValue
         )
+    }
+
+    private func copyPlaceholderValue(from element: AXUIElement) -> String? {
+        var placeholderObject: CFTypeRef?
+        let placeholderResult = AXUIElementCopyAttributeValue(
+            element,
+            "AXPlaceholderValue" as CFString,
+            &placeholderObject
+        )
+        guard placeholderResult == .success else {
+            return nil
+        }
+        return placeholderObject as? String
+    }
+
+    private func shouldTreatAsPlaceholder(_ currentValue: String, placeholder: String?) -> Bool {
+        guard let placeholder else {
+            return false
+        }
+
+        let normalizedCurrent = normalizeAccessibilityText(currentValue)
+        let normalizedPlaceholder = normalizeAccessibilityText(placeholder)
+
+        guard !normalizedCurrent.isEmpty, !normalizedPlaceholder.isEmpty else {
+            return false
+        }
+
+        return normalizedCurrent == normalizedPlaceholder
+    }
+
+    private func normalizeAccessibilityText(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    private func resolveTargetApplicationContext() -> TargetApplicationContext? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedObject: CFTypeRef?
+        let focusedResult = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedObject
+        )
+        if focusedResult == .success,
+           let focusedObject {
+            let focusedElement = unsafeDowncast(focusedObject, to: AXUIElement.self)
+            var pid: pid_t = 0
+            if AXUIElementGetPid(focusedElement, &pid) == .success,
+               let app = NSRunningApplication(processIdentifier: pid) {
+                return TargetApplicationContext(
+                    pid: pid,
+                    bundleIdentifier: app.bundleIdentifier ?? "",
+                    localizedName: app.localizedName ?? "unknown"
+                )
+            }
+        }
+
+        if let app = NSWorkspace.shared.frontmostApplication {
+            return TargetApplicationContext(
+                pid: app.processIdentifier,
+                bundleIdentifier: app.bundleIdentifier ?? "",
+                localizedName: app.localizedName ?? "unknown"
+            )
+        }
+
+        return nil
     }
 
     // MARK: - Pasteboard paste
