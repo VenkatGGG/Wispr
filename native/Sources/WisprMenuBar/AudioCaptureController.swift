@@ -1,4 +1,6 @@
 @preconcurrency import AVFoundation
+import AudioToolbox
+import CoreMedia
 import Foundation
 
 struct RecordedCapture {
@@ -10,10 +12,12 @@ final class AudioCaptureController {
     private let targetSampleRate: Double = 16_000
     private let targetChannels: AVAudioChannelCount = 1
     private let lock = NSLock()
+    private let captureQueue = DispatchQueue(label: "Flow.AudioCapture")
 
-    private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
-    private var outputFormat: AVAudioFormat?
+    private var captureSession: AVCaptureSession?
+    private var captureInput: AVCaptureDeviceInput?
+    private var captureOutput: AVCaptureAudioDataOutput?
+    private var sampleCollector: AudioSampleCollector?
     private var pcmData = Data()
     private var captureStartedAt: Date?
 
@@ -28,11 +32,7 @@ final class AudioCaptureController {
             )
         }
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
-
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+        guard let inputDevice = selectInputDevice() else {
             throw NSError(
                 domain: "WisprMenuBar",
                 code: 14,
@@ -40,49 +40,71 @@ final class AudioCaptureController {
             )
         }
 
-        guard let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: targetSampleRate,
-            channels: targetChannels,
-            interleaved: true
-        ) else {
+        NSLog(
+            "[AudioCapture] Using microphone: %@ manufacturer=%@ transport=%d uid=%@",
+            inputDevice.localizedName,
+            inputDevice.manufacturer,
+            inputDevice.transportType,
+            inputDevice.uniqueID
+        )
+
+        let captureSession = AVCaptureSession()
+        let captureInput = try AVCaptureDeviceInput(device: inputDevice)
+        let captureOutput = AVCaptureAudioDataOutput()
+        captureOutput.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: targetSampleRate,
+            AVNumberOfChannelsKey: Int(targetChannels),
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+
+        let collector = AudioSampleCollector { [weak self] chunk in
+            self?.appendPCM(chunk)
+        }
+        captureOutput.setSampleBufferDelegate(collector, queue: captureQueue)
+
+        captureSession.beginConfiguration()
+
+        guard captureSession.canAddInput(captureInput) else {
+            captureSession.commitConfiguration()
             throw NSError(
                 domain: "WisprMenuBar",
                 code: 15,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to configure the recording format."]
+                userInfo: [NSLocalizedDescriptionKey: "Flow could not attach to the selected microphone."]
             )
         }
 
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+        guard captureSession.canAddOutput(captureOutput) else {
+            captureSession.commitConfiguration()
             throw NSError(
                 domain: "WisprMenuBar",
                 code: 16,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to prepare the microphone audio converter."]
+                userInfo: [NSLocalizedDescriptionKey: "Flow could not configure audio capture output."]
             )
         }
 
-        converter.sampleRateConverterQuality = .max
+        captureSession.addInput(captureInput)
+        captureSession.addOutput(captureOutput)
+        captureSession.commitConfiguration()
 
         lock.withLock {
             pcmData.removeAll(keepingCapacity: true)
         }
 
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
-            self?.appendPCM(from: buffer)
-        }
+        captureSession.startRunning()
 
-        engine.prepare()
-        try engine.start()
-
-        self.engine = engine
-        self.converter = converter
-        self.outputFormat = outputFormat
+        self.captureSession = captureSession
+        self.captureInput = captureInput
+        self.captureOutput = captureOutput
+        self.sampleCollector = collector
         captureStartedAt = Date()
     }
 
     func cancelCapture() {
-        stopEngine()
+        stopCaptureSession()
         lock.withLock {
             pcmData.removeAll(keepingCapacity: false)
         }
@@ -90,11 +112,11 @@ final class AudioCaptureController {
     }
 
     func finishCapture(minimumCaptureMs: Int) throws -> RecordedCapture? {
-        guard engine != nil, let captureStartedAt else {
+        guard captureSession != nil, let captureStartedAt else {
             return nil
         }
 
-        stopEngine()
+        stopCaptureSession()
 
         let durationMs = Int(Date().timeIntervalSince(captureStartedAt) * 1000)
         self.captureStartedAt = nil
@@ -112,6 +134,14 @@ final class AudioCaptureController {
             return snapshot
         }
 
+        let averageLevel = averageSignalLevel(for: capturedPCM)
+        NSLog(
+            "[AudioCapture] Finished capture. durationMs=%d bytes=%d averageLevel=%.6f",
+            durationMs,
+            capturedPCM.count,
+            averageLevel
+        )
+
         guard !capturedPCM.isEmpty else {
             throw NSError(
                 domain: "WisprMenuBar",
@@ -120,64 +150,79 @@ final class AudioCaptureController {
             )
         }
 
-        if averageSignalLevel(for: capturedPCM) < 0.003 {
-            throw NSError(
-                domain: "WisprMenuBar",
-                code: 17,
-                userInfo: [NSLocalizedDescriptionKey: "No speech was detected from the microphone. Check the active input device and input volume."]
-            )
-        }
-
         return RecordedCapture(wavData: makeWAV(from: capturedPCM), durationMs: durationMs)
     }
 
-    private func stopEngine() {
-        if let inputNode = engine?.inputNode {
-            inputNode.removeTap(onBus: 0)
+    private func selectInputDevice() -> AVCaptureDevice? {
+        let devices = availableAudioDevices()
+        for device in devices {
+            NSLog(
+                "[AudioCapture] Discovered microphone: %@ manufacturer=%@ transport=%d uid=%@",
+                device.localizedName,
+                device.manufacturer,
+                device.transportType,
+                device.uniqueID
+            )
         }
-        engine?.stop()
-        engine?.reset()
-        engine = nil
-        converter = nil
-        outputFormat = nil
+
+        if let builtInMic = devices.first(where: isPreferredBuiltInMicrophone) {
+            return builtInMic
+        }
+
+        return devices.first
     }
 
-    private func appendPCM(from inputBuffer: AVAudioPCMBuffer) {
-        guard let converter, let outputFormat else { return }
-
-        let ratio = outputFormat.sampleRate / max(inputBuffer.format.sampleRate, 1)
-        let estimatedFrames = max(1, Int(Double(inputBuffer.frameLength) * ratio) + 32)
-        guard let convertedBuffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: AVAudioFrameCount(estimatedFrames)
-        ) else {
-            return
+    private func availableAudioDevices() -> [AVCaptureDevice] {
+        if #available(macOS 14.0, *) {
+            return AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.microphone, .external],
+                mediaType: .audio,
+                position: .unspecified
+            ).devices
         }
 
-        let inputBox = InputBufferBox(buffer: inputBuffer)
-        var conversionError: NSError?
-        let status = converter.convert(to: convertedBuffer, error: &conversionError) { _, outStatus in
-            guard let buffer = inputBox.buffer else {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-            inputBox.buffer = nil
-            outStatus.pointee = .haveData
-            return buffer
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInMicrophone, .externalUnknown],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices
+    }
+
+    private func isPreferredBuiltInMicrophone(_ device: AVCaptureDevice) -> Bool {
+        device.transportType == fourCharacterCode("bltn")
+    }
+
+    private func fourCharacterCode(_ string: String) -> Int32 {
+        string.utf8.reduce(0) { partial, byte in
+            (partial << 8) | Int32(byte)
         }
+    }
 
-        guard conversionError == nil else { return }
-        guard status == .haveData || status == .inputRanDry || status == .endOfStream else { return }
-        guard convertedBuffer.frameLength > 0 else { return }
-
-        let audioBuffer = convertedBuffer.audioBufferList.pointee.mBuffers
-        guard let bytes = audioBuffer.mData else { return }
-
-        let byteCount = Int(audioBuffer.mDataByteSize)
-        let chunk = Data(bytes: bytes, count: byteCount)
+    private func appendPCM(_ chunk: Data) {
         lock.withLock {
             pcmData.append(chunk)
         }
+    }
+
+    private func stopCaptureSession() {
+        captureOutput?.setSampleBufferDelegate(nil, queue: nil)
+
+        if let captureSession {
+            captureSession.stopRunning()
+            captureSession.beginConfiguration()
+            if let captureOutput {
+                captureSession.removeOutput(captureOutput)
+            }
+            if let captureInput {
+                captureSession.removeInput(captureInput)
+            }
+            captureSession.commitConfiguration()
+        }
+
+        sampleCollector = nil
+        captureOutput = nil
+        captureInput = nil
+        captureSession = nil
     }
 
     private func averageSignalLevel(for pcmData: Data) -> Double {
@@ -227,10 +272,72 @@ final class AudioCaptureController {
     }
 }
 
-private final class InputBufferBox: @unchecked Sendable {
-    var buffer: AVAudioPCMBuffer?
+private final class AudioSampleCollector: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    private let onSample: (Data) -> Void
+    private var hasLoggedSampleFormat = false
+    private var hasLoggedBufferFailure = false
 
-    init(buffer: AVAudioPCMBuffer) {
-        self.buffer = buffer
+    init(onSample: @escaping (Data) -> Void) {
+        self.onSample = onSample
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard CMSampleBufferDataIsReady(sampleBuffer) else {
+            return
+        }
+
+        if !hasLoggedSampleFormat,
+           let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+           let basicDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) {
+            let basicDescription = basicDescriptionPointer.pointee
+            NSLog(
+                "[AudioCapture] First sample buffer format: sampleRate=%.1f channels=%u formatID=%u bytesPerFrame=%u",
+                basicDescription.mSampleRate,
+                basicDescription.mChannelsPerFrame,
+                basicDescription.mFormatID,
+                basicDescription.mBytesPerFrame
+            )
+            hasLoggedSampleFormat = true
+        }
+
+        guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+            if !hasLoggedBufferFailure {
+                NSLog("[AudioCapture] Sample buffer did not contain a CMBlockBuffer.")
+                hasLoggedBufferFailure = true
+            }
+            return
+        }
+
+        let byteCount = CMBlockBufferGetDataLength(dataBuffer)
+        guard byteCount > 0 else {
+            return
+        }
+
+        var chunk = Data(count: byteCount)
+        let status = chunk.withUnsafeMutableBytes { rawBuffer -> OSStatus in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return kCMBlockBufferBadCustomBlockSourceErr
+            }
+            return CMBlockBufferCopyDataBytes(
+                dataBuffer,
+                atOffset: 0,
+                dataLength: byteCount,
+                destination: baseAddress
+            )
+        }
+
+        guard status == noErr else {
+            if !hasLoggedBufferFailure {
+                NSLog("[AudioCapture] Failed to copy audio bytes from sample buffer (OSStatus %d).", status)
+                hasLoggedBufferFailure = true
+            }
+            return
+        }
+
+        onSample(chunk)
     }
 }
