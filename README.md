@@ -17,7 +17,7 @@ This repo contains `Flow`, a local-first macOS dictation app, plus the older Pyt
 
 The current native default is Whisper-only output with single-line normalization. That means the app transcribes locally with `whisper.cpp`, flattens line breaks into spaces, applies phrase replacements, and inserts the final text.
 
-If you want Ollama-based cleanup back, set `formatter.enabled = true` in [config.toml](/Users/sri/Desktop/silly_experiments/Wispr/config.toml).
+If you want Ollama-based cleanup back, set `formatter.enabled = true` in [config.toml](config.toml).
 
 ## What Flow Does
 
@@ -71,15 +71,15 @@ make native-open
 
 Installed app location:
 
-- [~/Applications/Flow.app](/Users/sri/Applications/Flow.app)
+- `~/Applications/Flow.app`
 
 Build artifact location:
 
-- [~/Library/Caches/Flow/Flow.app](/Users/sri/Library/Caches/Flow/Flow.app)
+- `~/Library/Caches/Flow/Flow.app`
 
 ### 3. Grant macOS Permissions
 
-Grant these to [~/Applications/Flow.app](/Users/sri/Applications/Flow.app):
+Grant these to `~/Applications/Flow.app`:
 
 - Accessibility
 - Input Monitoring
@@ -110,7 +110,7 @@ make native-login-uninstall
 
 Main config file:
 
-- [config.toml](/Users/sri/Desktop/silly_experiments/Wispr/config.toml)
+- [config.toml](config.toml)
 
 Useful current knobs:
 
@@ -125,19 +125,19 @@ Useful current knobs:
 
 Formatter prompt file:
 
-- [prompts/formatter_system.txt](/Users/sri/Desktop/silly_experiments/Wispr/prompts/formatter_system.txt)
+- [prompts/formatter_system.txt](prompts/formatter_system.txt)
 
 ## Local Data Files
 
 Application support directory:
 
-- [~/Library/Application Support/Flow](/Users/sri/Library/Application%20Support/Flow)
+- `~/Library/Application Support/Flow`
 
 Files:
 
-- History: [~/Library/Application Support/Flow/history.json](/Users/sri/Library/Application%20Support/Flow/history.json)
-- Phrases: [~/Library/Application Support/Flow/phrases.json](/Users/sri/Library/Application%20Support/Flow/phrases.json)
-- Runtime config: [~/Library/Application Support/Flow/runtime.json](/Users/sri/Library/Application%20Support/Flow/runtime.json)
+- History: `~/Library/Application Support/Flow/history.json`
+- Phrases: `~/Library/Application Support/Flow/phrases.json`
+- Runtime config: `~/Library/Application Support/Flow/runtime.json`
 
 ## Phrases
 
@@ -159,7 +159,7 @@ With that entry, speaking `LinkedIn` can resolve to the stored replacement inste
 
 ## Python Prototype
 
-The older Python daemon is still in the repo under [src/wispr](/Users/sri/Desktop/silly_experiments/Wispr/src/wispr), but the native app is the primary path now.
+The older Python daemon is still in the repo under [src/wispr](src/wispr), but the native app is the primary path now.
 
 If you want to run the prototype anyway:
 
@@ -170,7 +170,7 @@ make run
 
 ## Repo Layout
 
-- Native app: [native/](/Users/sri/Desktop/silly_experiments/Wispr/native/Package.swift)
-- Python prototype: [src/wispr](/Users/sri/Desktop/silly_experiments/Wispr/src/wispr)
-- Scripts: [scripts/](/Users/sri/Desktop/silly_experiments/Wispr/scripts)
-- Models: [models/](/Users/sri/Desktop/silly_experiments/Wispr/models)
+- Native app: [native/](native/)
+- Python prototype: [src/wispr](src/wispr)
+- Scripts: [scripts/](scripts/)
+- Models: [models/](models/)
