@@ -12,6 +12,7 @@ struct AppConfiguration {
     let ollamaHost: String
     let ollamaPort: Int
     let ollamaModel: String
+    let useOllamaFormatter: Bool
     let formatterPromptURL: URL
     let formatterMaxInputCharacters: Int
     let minimumCaptureMs: Int
@@ -26,6 +27,7 @@ struct AppConfiguration {
         try fileManager.createDirectory(at: appSupport, withIntermediateDirectories: true)
         try migrateLegacySupportFiles(fileManager: fileManager, appSupport: appSupport)
         let repoRoot = try resolveRepositoryRoot(fileManager: fileManager, appSupport: appSupport)
+        let configURL = repoRoot.appendingPathComponent("config.toml")
 
         return AppConfiguration(
             whisperHost: "127.0.0.1",
@@ -35,6 +37,11 @@ struct AppConfiguration {
             ollamaHost: "127.0.0.1",
             ollamaPort: 11434,
             ollamaModel: "qwen2.5:3b",
+            useOllamaFormatter: readBoolean(
+                from: configURL,
+                section: "formatter",
+                key: "enabled"
+            ) ?? false,
             formatterPromptURL: repoRoot.appendingPathComponent("prompts/formatter_system.txt"),
             formatterMaxInputCharacters: 4000,
             minimumCaptureMs: 180,
@@ -134,5 +141,44 @@ struct AppConfiguration {
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "Could not locate the repository root containing config.toml. Reinstall the native app so it can refresh its runtime configuration."]
         )
+    }
+
+    private static func readBoolean(from configURL: URL, section: String, key: String) -> Bool? {
+        guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else {
+            return nil
+        }
+
+        var activeSection: String?
+        for rawLine in contents.components(separatedBy: .newlines) {
+            let uncommented = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            let line = uncommented.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            if line.hasPrefix("[") && line.hasSuffix("]") {
+                activeSection = String(line.dropFirst().dropLast())
+                continue
+            }
+
+            guard activeSection == section,
+                  line.hasPrefix("\(key)"),
+                  let separatorIndex = line.firstIndex(of: "=")
+            else {
+                continue
+            }
+
+            let rawValue = line[line.index(after: separatorIndex)...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            switch rawValue {
+            case "true":
+                return true
+            case "false":
+                return false
+            default:
+                return nil
+            }
+        }
+
+        return nil
     }
 }

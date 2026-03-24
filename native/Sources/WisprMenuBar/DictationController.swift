@@ -14,7 +14,7 @@ final class DictationController: @unchecked Sendable {
     private let hotkeyMonitor = HotkeyMonitor()
     private let audioCaptureController = AudioCaptureController()
     private let whisperService: WhisperService
-    private let ollamaFormatter: OllamaFormatter
+    private let ollamaFormatter: OllamaFormatter?
     private let textInserter: TextInserter
     private let workQueue = DispatchQueue(label: "WisprMenuBar.Dictation")
 
@@ -29,7 +29,11 @@ final class DictationController: @unchecked Sendable {
         self.phraseStore = phraseStore
         self.presentationController = presentationController
         whisperService = WhisperService(configuration: configuration)
-        ollamaFormatter = try OllamaFormatter(configuration: configuration)
+        if configuration.useOllamaFormatter {
+            ollamaFormatter = try OllamaFormatter(configuration: configuration)
+        } else {
+            ollamaFormatter = nil
+        }
         textInserter = TextInserter(restoreClipboardDelayMs: configuration.restoreClipboardDelayMs)
 
         hotkeyMonitor.onPress = { [weak self] in self?.beginCapture() }
@@ -67,8 +71,10 @@ final class DictationController: @unchecked Sendable {
         }
         hotkeyMonitor.start()
 
-        workQueue.async { [weak self] in
-            self?.ollamaFormatter.warmup()
+        if configuration.useOllamaFormatter {
+            workQueue.async { [weak self] in
+                self?.ollamaFormatter?.warmup()
+            }
         }
     }
 
@@ -138,8 +144,14 @@ final class DictationController: @unchecked Sendable {
     private func process(_ job: CaptureJob) {
         do {
             let rawTranscript = try whisperService.transcribe(wavData: job.capture.wavData)
-            let formattedText = try ollamaFormatter.format(text: rawTranscript)
-            let finalText = phraseStore.apply(to: formattedText)
+            let normalizedTranscript = Self.normalizedForInsertion(rawTranscript)
+            let formattedText: String
+            if let ollamaFormatter {
+                formattedText = Self.normalizedForInsertion(try ollamaFormatter.format(text: normalizedTranscript))
+            } else {
+                formattedText = normalizedTranscript
+            }
+            let finalText = Self.normalizedForInsertion(phraseStore.apply(to: formattedText))
 
             guard !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 Task { @MainActor [presentationController] in
@@ -155,7 +167,7 @@ final class DictationController: @unchecked Sendable {
             }
 
             historyStore.addEntry(
-                rawTranscript: rawTranscript,
+                rawTranscript: normalizedTranscript,
                 finalText: finalText,
                 sourceApp: job.sourceAppName
             )
@@ -174,5 +186,11 @@ final class DictationController: @unchecked Sendable {
                 presentationController.updateStatus(.error(error.localizedDescription))
             }
         }
+    }
+
+    private static func normalizedForInsertion(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

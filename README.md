@@ -1,66 +1,149 @@
 # Wispr
 
-Wispr is a local macOS dictation daemon that:
+This repo contains `Flow`, a local-first macOS dictation app, plus the older Python prototype it grew out of.
 
-- starts recording when you hold either `Option` key,
-- stops recording on release,
-- transcribes with a persistent `whisper.cpp` server,
-- cleans the transcript with a local Ollama model,
-- pastes the final text into the currently focused app without stealing focus,
-- exposes a floating history panel from the menu bar,
-- supports a local phrase dictionary for exact-match replacements.
+`Flow` runs as a menu bar app on macOS. Hold `Option`, speak, release, and it inserts the result into the focused text field without taking window focus.
 
-The implementation is intentionally narrow. There is no cloud dependency, no account system, and no settings UI.
+## Current Default Behavior
 
-## Stack
+- Native app name: `Flow`
+- Platform: macOS only
+- Trigger: bare `Option`
+- Speech-to-text: `whisper.cpp`
+- Default Whisper model: `models/ggml-small.en.bin`
+- Text formatting: disabled by default in the native app
+- Phrase replacements: enabled
+- History: last 20 inserted entries
 
-- Native path: Swift/AppKit menu bar app
-- Python path: Python 3.11 daemon
-- `whisper.cpp` server for a hot transcription model in RAM
-- Ollama for local text cleanup
-- Python prototype uses `sounddevice` and `PyObjC`
+The current native default is Whisper-only output with single-line normalization. That means the app transcribes locally with `whisper.cpp`, flattens line breaks into spaces, applies phrase replacements, and inserts the final text.
+
+If you want Ollama-based cleanup back, set `formatter.enabled = true` in [config.toml](/Users/sri/Desktop/silly_experiments/Wispr/config.toml).
+
+## What Flow Does
+
+1. Waits for a global `Option` key hold
+2. Records microphone audio while the key is held
+3. Sends the audio to a local `whisper.cpp` server
+4. Optionally formats the transcript with Ollama when enabled
+5. Applies phrase replacements from `phrases.json`
+6. Inserts the result at the current cursor
+
+## Native App
+
+The native app is the main path now.
+
+Key behavior:
+
+- Single click the menu bar icon: show history
+- Double click the menu bar icon: show phrases
+- Right click the menu bar icon: show utility menu
+- History entries are shown as a simple vertical list of final inserted text
+- Clicking a history entry copies it to the clipboard
+- Phrase matching is normalized for simple casing and punctuation variants
+
+Important limitations:
+
+- Works best in normal macOS text fields
+- Some secure fields, games, VMs, or remote desktop apps may block insertion
+- Accessibility and Input Monitoring permissions are required for reliable insertion
 
 ## Quick Start
 
-The repo currently contains two runnable paths:
+### 1. Bootstrap Dependencies
 
-- the original Python daemon
-- a native macOS menu bar app under [`native/`](/Users/sri/Desktop/silly_experiments/Wispr/native/Package.swift)
+Run:
 
-If you want the Flow experience, use the native app.
+```bash
+make bootstrap
+```
 
-### Python Daemon
+That installs the local dependencies used by the project, including `whisper.cpp`, Ollama, and the Python environment used by the prototype.
 
-1. Run `make bootstrap`
-2. Grant these permissions when macOS prompts for them:
-   - Accessibility
-   - Input Monitoring
-   - Microphone
-3. Run `make doctor`
-4. Run `make run`
+### 2. Build and Install the Native App
 
-### Native Menu Bar App
+Run:
 
-- Build the app bundle with `make native-build`
-- Install the app into `~/Applications` with `make native-install`
-- Open it with `make native-open`
-- The build artifact is created at [`~/Library/Caches/Flow/Flow.app`](/Users/sri/Library/Caches/Flow/Flow.app)
-- Install login startup with `make native-login-install`
-- Remove login startup with `make native-login-uninstall`
+```bash
+make native-build
+make native-install
+make native-open
+```
 
-For macOS permissions, grant access to the installed app at:
+Installed app location:
 
-- `~/Applications/Flow.app`
+- [~/Applications/Flow.app](/Users/sri/Applications/Flow.app)
 
-The native app keeps a rolling recent history of the last 20 entries at:
+Build artifact location:
 
-- `~/Library/Application Support/Flow/history.json`
+- [~/Library/Caches/Flow/Flow.app](/Users/sri/Library/Caches/Flow/Flow.app)
 
-The native phrase dictionary lives at:
+### 3. Grant macOS Permissions
 
-- `~/Library/Application Support/Flow/phrases.json`
+Grant these to [~/Applications/Flow.app](/Users/sri/Applications/Flow.app):
 
-Example `phrases.json` entry:
+- Accessibility
+- Input Monitoring
+- Microphone
+
+### 4. Use It
+
+1. Focus any text field
+2. Hold `Option`
+3. Speak
+4. Release `Option`
+
+## Login Startup
+
+Install startup at login:
+
+```bash
+make native-login-install
+```
+
+Remove startup at login:
+
+```bash
+make native-login-uninstall
+```
+
+## Config
+
+Main config file:
+
+- [config.toml](/Users/sri/Desktop/silly_experiments/Wispr/config.toml)
+
+Useful current knobs:
+
+- `formatter.enabled = false`
+  Native app uses Whisper-only output
+- `formatter.enabled = true`
+  Native app adds the Ollama rewrite step back in
+- `prompt_path`
+  Points at the formatter prompt file
+- `restore_clipboard_delay_ms`
+  Controls paste restore timing
+
+Formatter prompt file:
+
+- [prompts/formatter_system.txt](/Users/sri/Desktop/silly_experiments/Wispr/prompts/formatter_system.txt)
+
+## Local Data Files
+
+Application support directory:
+
+- [~/Library/Application Support/Flow](/Users/sri/Library/Application%20Support/Flow)
+
+Files:
+
+- History: [~/Library/Application Support/Flow/history.json](/Users/sri/Library/Application%20Support/Flow/history.json)
+- Phrases: [~/Library/Application Support/Flow/phrases.json](/Users/sri/Library/Application%20Support/Flow/phrases.json)
+- Runtime config: [~/Library/Application Support/Flow/runtime.json](/Users/sri/Library/Application%20Support/Flow/runtime.json)
+
+## Phrases
+
+Phrase replacements are stored in `phrases.json`.
+
+Example:
 
 ```json
 [
@@ -72,24 +155,22 @@ Example `phrases.json` entry:
 ]
 ```
 
-## Behavior
+With that entry, speaking `LinkedIn` can resolve to the stored replacement instead of inserting the literal word.
 
-- Recording starts only when `Option` is pressed by itself.
-- If another key is pressed while `Option` is still held, the capture is cancelled.
-- Very short taps are ignored.
-- Left click on the menu bar icon opens the floating history panel.
-- Right click on the menu bar icon opens the utility menu.
-- Phrase replacements use normalized matching for simple casing and punctuation variants.
-- Output is inserted via accessibility or targeted paste, depending on the app.
+## Python Prototype
 
-## Config
+The older Python daemon is still in the repo under [src/wispr](/Users/sri/Desktop/silly_experiments/Wispr/src/wispr), but the native app is the primary path now.
 
-Edit [`config.toml`](/Users/sri/Desktop/silly_experiments/Wispr/config.toml) to change ports, paths, model names, or timing knobs.
+If you want to run the prototype anyway:
 
-Edit [`prompts/formatter_system.txt`](/Users/sri/Desktop/silly_experiments/Wispr/prompts/formatter_system.txt) to change the rewrite prompt.
+```bash
+make doctor
+make run
+```
 
-## Notes
+## Repo Layout
 
-- The bootstrap script downloads `ggml-small.en.bin` into [`models/`](/Users/sri/Desktop/silly_experiments/Wispr/models/.gitkeep).
-- The default Ollama model is `qwen2.5:3b`.
-- The app can start `ollama serve` and `whisper-server` itself when those binaries are installed locally.
+- Native app: [native/](/Users/sri/Desktop/silly_experiments/Wispr/native/Package.swift)
+- Python prototype: [src/wispr](/Users/sri/Desktop/silly_experiments/Wispr/src/wispr)
+- Scripts: [scripts/](/Users/sri/Desktop/silly_experiments/Wispr/scripts)
+- Models: [models/](/Users/sri/Desktop/silly_experiments/Wispr/models)
