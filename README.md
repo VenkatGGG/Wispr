@@ -1,67 +1,43 @@
 # Wispr
 
-This repo contains `Flow`, a local-first macOS dictation app, plus the older Python prototype it grew out of.
+`Flow` is a local-first macOS dictation app in this repo.
 
-`Flow` runs as a menu bar app on macOS. Hold `Option`, speak, release, and it inserts the result into the focused text field without taking window focus.
+Hold `Option`, speak, release, and your words are inserted into the text field you are currently using.
 
-## Current Default Behavior
+## What It Does
 
-- Native app name: `Flow`
-- Platform: macOS only
-- Trigger: bare `Option`
-- Speech-to-text: `whisper.cpp`
-- Default Whisper model: `models/ggml-small.en.bin`
-- Text formatting: disabled by default in the native app
-- Phrase replacements: enabled
-- History: last 20 inserted entries
+- runs as a lightweight menu bar app
+- records while you hold `Option`
+- transcribes speech locally with `whisper.cpp`
+- optionally cleans up text with a local Ollama model
+- inserts the result at your cursor
+- keeps a small local history
+- supports custom phrase replacements
 
-The current native default is Whisper-only output with single-line normalization. That means the app transcribes locally with `whisper.cpp`, flattens line breaks into spaces, applies phrase replacements, and inserts the final text.
+Everything stays on your machine.
 
-If you want Ollama-based cleanup back, set `formatter.enabled = true` in [config.toml](config.toml).
+## Current Default
 
-## What Flow Does
+The native app currently uses:
 
-1. Waits for a global `Option` key hold
-2. Records microphone audio while the key is held
-3. Sends the audio to a local `whisper.cpp` server
-4. Optionally formats the transcript with Ollama when enabled
-5. Applies phrase replacements from `phrases.json`
-6. Inserts the result at the current cursor
+- `whisper.cpp` for transcription
+- `ggml-small.en.bin` as the default Whisper model
+- phrase replacements
+- single-line insertion
 
-## Native App
+Ollama-based cleanup is currently turned off by default.
 
-The native app is the main path now.
-
-Key behavior:
-
-- Single click the menu bar icon: show history
-- Double click the menu bar icon: show phrases
-- Right click the menu bar icon: show utility menu
-- History entries are shown as a simple vertical list of final inserted text
-- Clicking a history entry copies it to the clipboard
-- Phrase matching is normalized for simple casing and punctuation variants
-
-Important limitations:
-
-- Works best in normal macOS text fields
-- Some secure fields, games, VMs, or remote desktop apps may block insertion
-- Accessibility and Input Monitoring permissions are required for reliable insertion
+If you want to turn it back on, set `formatter.enabled = true` in [config.toml](config.toml).
 
 ## Quick Start
 
-### 1. Bootstrap Dependencies
-
-Run:
+### 1. Install Dependencies
 
 ```bash
 make bootstrap
 ```
 
-That installs the local dependencies used by the project, including `whisper.cpp`, Ollama, and the Python environment used by the prototype.
-
-### 2. Build and Install the Native App
-
-Run:
+### 2. Build and Install Flow
 
 ```bash
 make native-build
@@ -69,108 +45,96 @@ make native-install
 make native-open
 ```
 
-Installed app location:
+The installed app lives at:
 
 - `~/Applications/Flow.app`
 
-Build artifact location:
-
-- `~/Library/Caches/Flow/Flow.app`
-
 ### 3. Grant macOS Permissions
 
-Grant these to `~/Applications/Flow.app`:
+Grant these permissions to `Flow.app`:
 
 - Accessibility
 - Input Monitoring
 - Microphone
 
-### 4. Use It
+### 4. Start Dictating
 
 1. Focus any text field
 2. Hold `Option`
 3. Speak
 4. Release `Option`
 
-## Login Startup
+## How To Use It
 
-Install startup at login:
+- single click the menu bar icon to open history
+- double click the menu bar icon to open phrases
+- right click the menu bar icon for the utility menu
+
+## Phrases
+
+You can create personal replacements such as:
+
+- `LinkedIn` -> `https://www.linkedin.com/`
+
+Phrases are stored locally in:
+
+- `~/Library/Application Support/Flow/phrases.json`
+
+## History
+
+Flow keeps the last 20 entries locally in:
+
+- `~/Library/Application Support/Flow/history.json`
+
+## Config
+
+Main config:
+
+- [config.toml](config.toml)
+
+Rewrite prompt:
+
+- [prompts/formatter_system.txt](prompts/formatter_system.txt)
+
+Useful settings:
+
+- `formatter.enabled`
+- `restore_clipboard_delay_ms`
+
+## Start At Login
+
+Install login startup:
 
 ```bash
 make native-login-install
 ```
 
-Remove startup at login:
+Remove login startup:
 
 ```bash
 make native-login-uninstall
 ```
 
-## Config
+## Troubleshooting
 
-Main config file:
+If text is not being inserted:
 
-- [config.toml](config.toml)
+- make sure `Flow.app` has Accessibility access
+- make sure `Flow.app` has Input Monitoring access
+- test in TextEdit first
 
-Useful current knobs:
+If microphone input is not working:
 
-- `formatter.enabled = false`
-  Native app uses Whisper-only output
-- `formatter.enabled = true`
-  Native app adds the Ollama rewrite step back in
-- `prompt_path`
-  Points at the formatter prompt file
-- `restore_clipboard_delay_ms`
-  Controls paste restore timing
-
-Formatter prompt file:
-
-- [prompts/formatter_system.txt](prompts/formatter_system.txt)
-
-## Local Data Files
-
-Application support directory:
-
-- `~/Library/Application Support/Flow`
-
-Files:
-
-- History: `~/Library/Application Support/Flow/history.json`
-- Phrases: `~/Library/Application Support/Flow/phrases.json`
-- Runtime config: `~/Library/Application Support/Flow/runtime.json`
-
-## Phrases
-
-Phrase replacements are stored in `phrases.json`.
-
-Example:
-
-```json
-[
-  {
-    "id": "D7F7B31E-9864-4D77-8E71-ED4A2DFE3B3D",
-    "trigger": "LinkedIn",
-    "replacement": "https://www.linkedin.com/"
-  }
-]
-```
-
-With that entry, speaking `LinkedIn` can resolve to the stored replacement instead of inserting the literal word.
-
-## Python Prototype
-
-The older Python daemon is still in the repo under [src/wispr](src/wispr), but the native app is the primary path now.
-
-If you want to run the prototype anyway:
-
-```bash
-make doctor
-make run
-```
+- make sure `Flow.app` has Microphone access
+- check the active input device in macOS Sound settings
 
 ## Repo Layout
 
-- Native app: [native/](native/)
-- Python prototype: [src/wispr](src/wispr)
-- Scripts: [scripts/](scripts/)
-- Models: [models/](models/)
+- native app: [native/](native/)
+- python prototype: [src/wispr](src/wispr)
+- scripts: [scripts/](scripts/)
+- models: [models/](models/)
+
+## Notes
+
+The Python prototype is still in the repo, but the native app is the main path now.
